@@ -1,1 +1,1 @@
-# scn-cli
+# scan-cli
