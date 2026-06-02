@@ -54,6 +54,7 @@ class DiskAnalyzerGUI:
         main = tk.Frame(self.root, bg=self.BG)
         main.grid(row=0, column=0, sticky="nsew", padx=40, pady=30)
         main.columnconfigure(0, weight=1)
+        main.rowconfigure(7, weight=1)
 
         # ── Header ──
         tk.Label(
@@ -72,9 +73,14 @@ class DiskAnalyzerGUI:
             fg=self.TEXT_MUTED,
         ).grid(row=1, column=0, pady=(0, 28))
 
+        # ── Input controls container (hidden when showing results) ──
+        self._input_frame = tk.Frame(main, bg=self.BG)
+        self._input_frame.grid(row=2, column=0, sticky="ew")
+        self._input_frame.columnconfigure(0, weight=1)
+
         # ── Folder selection row ──
-        sel_frame = tk.Frame(main, bg=self.BG)
-        sel_frame.grid(row=2, column=0, sticky="ew", pady=(0, 20))
+        sel_frame = tk.Frame(self._input_frame, bg=self.BG)
+        sel_frame.grid(row=0, column=0, sticky="ew", pady=(0, 20))
         sel_frame.columnconfigure(0, weight=0)
         sel_frame.columnconfigure(1, weight=1)
 
@@ -112,8 +118,8 @@ class DiskAnalyzerGUI:
         self._browse_btn.grid(row=1, column=1, sticky="e")
 
         # ── Quick-path buttons ──
-        quick_frame = tk.Frame(main, bg=self.BG)
-        quick_frame.grid(row=3, column=0, sticky="w", pady=(0, 24))
+        quick_frame = tk.Frame(self._input_frame, bg=self.BG)
+        quick_frame.grid(row=1, column=0, sticky="w", pady=(0, 24))
         tk.Label(
             quick_frame, text="Quick:", font=("Segoe UI", 9), bg=self.BG, fg=self.TEXT_MUTED
         ).pack(side=tk.LEFT, padx=(0, 6))
@@ -143,24 +149,24 @@ class DiskAnalyzerGUI:
                 lambda _e, b=btn: b.configure(fg=self.ACCENT),
             )
 
-        # ── Scan button ──
+        # ── Scan button & progress (in input_frame) ──
         self._scan_btn = self._styled_btn(
-            main,
+            self._input_frame,
             text="▶  Start Scan",
             command=self._start_scan,
             bg=self.ACCENT,
             hover=self.ACCENT_HOVER,
             font_size=12,
         )
-        self._scan_btn.grid(row=4, column=0, pady=(0, 18), ipady=8)
+        self._scan_btn.grid(row=2, column=0, pady=(0, 18), ipady=8)
 
         # ── Progress bar ──
         self._progress = ttk.Progressbar(
-            main,
+            self._input_frame,
             mode="indeterminate",
             length=600,
         )
-        self._progress.grid(row=5, column=0, pady=(0, 8), sticky="ew")
+        self._progress.grid(row=3, column=0, pady=(0, 8), sticky="ew")
         self._progress.grid_remove()
 
         # ── Status label ──
@@ -176,7 +182,12 @@ class DiskAnalyzerGUI:
         )
         self._status_lbl.grid(row=6, column=0, pady=(0, 4))
 
-        # ── (reserved) ──
+        # ── Results container (hidden until scan completes) ──
+        self._results_frame = tk.Frame(main, bg=self.BG)
+        self._results_frame.grid(row=7, column=0, sticky="nsew", pady=(0, 10))
+        self._results_frame.columnconfigure(0, weight=1)
+        self._results_frame.rowconfigure(1, weight=1)
+        self._results_frame.grid_remove()
 
     def _styled_btn(
         self,
@@ -333,49 +344,51 @@ class DiskAnalyzerGUI:
             elif cancelled:
                 self._status_var.set("⛔  Scan cancelled")
             elif data:
-                s = data["summary"]
-                self._status_var.set(
-                    f"✅  Complete —  {s['total_files']:,} files  ·  "
-                    f"{s['total_size'] / (1024**3):.2f} GB  ·  "
-                    f"largest: {s['largest_file_name']}"
-                )
-                self._show_results_dialog(data)
+                self._show_results(data)
 
         self.root.after(0, _finish)
 
-    def _show_results_dialog(self, data) -> None:
-        """Open a native results window with scan summary."""
+    def _show_results(self, data) -> None:
+        """Fill the embedded results frame and show it, hiding the input form."""
         s = data["summary"]
         scan_info = data["scan_info"]
 
-        dialog = tk.Toplevel(self.root)
-        dialog.title("Scan Results")
-        dialog.configure(bg=self.BG)
-        dialog.minsize(480, 380)
+        # Clear any previous results
+        for child in self._results_frame.winfo_children():
+            child.destroy()
 
-        # Center on parent
-        dialog.transient(self.root)
-        dialog.grab_set()
+        # ── Scrollable canvas for results ──
+        canvas = tk.Canvas(self._results_frame, bg=self.BG, highlightthickness=0)
+        scrollbar = tk.Scrollbar(self._results_frame, orient="vertical", command=canvas.yview)
+        scrollable = tk.Frame(canvas, bg=self.BG)
 
-        # ── Header ──
-        header = tk.Frame(dialog, bg=self.BG, padx=30, pady=20)
-        header.pack(fill=tk.X)
+        scrollable.bind("<Configure>", lambda _e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=scrollable, anchor="nw", width=canvas.winfo_width())
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        canvas.grid(row=0, column=0, sticky="nsew")
+        scrollbar.grid(row=0, column=1, sticky="ns")
+        canvas.bind("<Configure>", lambda e: canvas.itemconfig(1, width=e.width))
+
+        scrollable.columnconfigure(0, weight=1)
+
+        # ── Results header ──
+        header = tk.Frame(scrollable, bg=self.BG, padx=10, pady=(0, 12))
+        header.grid(row=0, column=0, sticky="ew")
         tk.Label(
-            header,
-            text="✅  Scan Complete",
-            font=("Segoe UI", 18, "bold"),
+            header, text="✅  Scan Complete",
+            font=("Segoe UI", 16, "bold"),
             bg=self.BG, fg=self.TEXT,
         ).pack()
         tk.Label(
-            header,
-            text=self._path_var.get(),
-            font=("Consolas", 10),
-            bg=self.BG, fg=self.TEXT_MUTED,
-        ).pack(pady=(4, 0))
+            header, text=self._path_var.get(),
+            font=("Consolas", 9), bg=self.BG, fg=self.TEXT_MUTED,
+        ).pack()
 
         # ── Stats cards ──
-        cards_frame = tk.Frame(dialog, bg=self.BG, padx=30, pady=10)
-        cards_frame.pack(fill=tk.BOTH, expand=True)
+        cards_frame = tk.Frame(scrollable, bg=self.BG, padx=0, pady=6)
+        cards_frame.grid(row=1, column=0, sticky="ew")
+        cards_frame.columnconfigure(0, weight=1)
 
         stats = [
             ("Total Size", f"{s['total_size'] / (1024**3):.2f} GB",
@@ -387,12 +400,12 @@ class DiskAnalyzerGUI:
             ("Avg File Size", f"{s['average_file_size'] / 1024:.1f} KB", ""),
         ]
 
-        for i, (label, value, sub) in enumerate(stats):
+        for label, value, sub in stats:
             card = tk.Frame(
-                cards_frame, bg=self.SURFACE, padx=16, pady=12,
+                cards_frame, bg=self.SURFACE, padx=16, pady=10,
                 highlightbackground=self.BORDER, highlightthickness=1,
             )
-            card.pack(fill=tk.X, pady=4)
+            card.grid(row=cards_frame.grid_size()[1], column=0, sticky="ew", pady=3)
             row = tk.Frame(card, bg=self.SURFACE)
             row.pack(fill=tk.X)
             tk.Label(
@@ -412,16 +425,17 @@ class DiskAnalyzerGUI:
 
         # ── Top 5 extensions ──
         if "extensions" in data and data["extensions"]:
-            ext_frame = tk.Frame(dialog, bg=self.BG, padx=30, pady=(0, 10))
-            ext_frame.pack(fill=tk.X)
+            ext_frame = tk.Frame(scrollable, bg=self.BG, padx=0, pady=(4, 10))
+            ext_frame.grid(row=2, column=0, sticky="ew")
+            ext_frame.columnconfigure(0, weight=1)
             tk.Label(
                 ext_frame, text="Top File Types",
                 font=("Segoe UI", 10, "bold"),
                 bg=self.BG, fg=self.TEXT,
-            ).pack(anchor="w", pady=(0, 4))
+            ).grid(row=0, column=0, sticky="w", pady=(0, 4))
             for ext in data["extensions"][:5]:
                 ext_row = tk.Frame(ext_frame, bg=self.SURFACE2, padx=12, pady=4)
-                ext_row.pack(fill=tk.X, pady=2)
+                ext_row.grid(row=ext_frame.grid_size()[1], column=0, sticky="ew", pady=2)
                 tk.Label(
                     ext_row, text=ext["extension"],
                     font=("Consolas", 10, "bold"),
@@ -434,19 +448,29 @@ class DiskAnalyzerGUI:
                     bg=self.SURFACE2, fg=self.TEXT_MUTED,
                 ).pack(side=tk.RIGHT)
 
-        # ── Close button ──
-        btn_frame = tk.Frame(dialog, bg=self.BG, padx=30, pady=16)
-        btn_frame.pack(fill=tk.X)
-        close_btn = tk.Button(
-            btn_frame, text="Close",
+        # ── Scan Again button ──
+        btn_frame = tk.Frame(scrollable, bg=self.BG, padx=0, pady=8)
+        btn_frame.grid(row=3, column=0, sticky="ew")
+        again_btn = tk.Button(
+            btn_frame, text="🔄  Scan Another Folder",
             font=("Segoe UI", 10, "bold"),
             bg=self.ACCENT, fg=self.TEXT,
             relief="flat", cursor="hand2",
-            command=dialog.destroy,
+            command=self._reset_view,
         )
-        close_btn.pack(pady=4)
-        close_btn.bind("<Enter>", lambda _e: close_btn.configure(bg=self.ACCENT_HOVER))
-        close_btn.bind("<Leave>", lambda _e: close_btn.configure(bg=self.ACCENT))
+        again_btn.pack()
+        again_btn.bind("<Enter>", lambda _e: again_btn.configure(bg=self.ACCENT_HOVER))
+        again_btn.bind("<Leave>", lambda _e: again_btn.configure(bg=self.ACCENT))
+
+        # ── Swap views ──
+        self._input_frame.grid_remove()
+        self._results_frame.grid()
+
+    def _reset_view(self) -> None:
+        """Hide results and show the input form again."""
+        self._results_frame.grid_remove()
+        self._input_frame.grid()
+        self._status_var.set("Ready  —  choose a folder and click Start Scan")
 
     # ── Run ─────────────────────────────────────────────────────────
 
