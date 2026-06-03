@@ -94,8 +94,20 @@ def save_cache(config: Config, files: List[Dict], scan_path: str) -> str:
     return config.cache_path
 
 
-def load_cache(config: Config) -> Optional[List[Dict]]:
-    """Load scan results from cache. Returns None if cache is missing or invalid."""
+def load_cache(config: Config, scan_path: Optional[str] = None) -> Optional[List[Dict]]:
+    """
+    Load scan results from cache.
+
+    Args:
+        config: Application configuration.
+        scan_path: If provided, only returns cached data when the cached
+                   scan_path matches this path (ensures cache is for the
+                   same folder being requested).
+
+    Returns:
+        List of file dicts, or None if cache is missing, invalid, or
+        the scan_path doesn't match.
+    """
     if not os.path.exists(config.cache_path):
         return None
     try:
@@ -103,6 +115,11 @@ def load_cache(config: Config) -> Optional[List[Dict]]:
             data = json.load(f)
         if "files" not in data or not isinstance(data["files"], list):
             return None
+        # Verify the cache is for the same scan path (when provided)
+        if scan_path is not None:
+            cached_path = data.get("scan_path")
+            if cached_path != scan_path:
+                return None
         return data["files"]
     except (json.JSONDecodeError, OSError):
         return None

@@ -40,7 +40,7 @@ def parse_args() -> argparse.Namespace:
         "--path",
         type=str,
         default=None,
-        help="Directory to scan (default: C:\\)",
+        help="Directory to scan (default: C:\) — pre-fills path in GUI mode",
     )
 
     parser.add_argument(
@@ -73,7 +73,7 @@ def main() -> None:
     if not args.cli:
         from disk_analyzer.gui import DiskAnalyzerGUI
 
-        gui = DiskAnalyzerGUI()
+        gui = DiskAnalyzerGUI(initial_path=args.path)
         gui.run()
         return
 
@@ -103,7 +103,7 @@ def main() -> None:
     files = None
     if not args.scan:
         print("  🔍 Checking cache...")
-        files = load_cache(config)
+        files = load_cache(config, scan_path=scan_path)
         if files is not None:
             print(f"  ✅ Loaded {len(files):,} files from cache ({config.cache_path})")
         else:

@@ -1,4 +1,7 @@
-"""Graphical launcher for the Disk Storage Analyzer using tkinter."""
+"""Graphical launcher for the Disk Storage Analyzer using tkinter.
+
+Each scan opens in a new tab within the same window.
+"""
 
 import os
 import threading
@@ -8,9 +11,9 @@ from typing import Optional
 
 
 class DiskAnalyzerGUI:
-    """A tkinter GUI for selecting a folder and launching a disk scan."""
+    """A tkinter GUI with menu bar — each scan result opens in a new tab."""
 
-    # Color palette (matches the HTML report dark theme)
+    # Color palette (dark theme)
     BG = "#0f172a"
     SURFACE = "#1e293b"
     SURFACE2 = "#334155"
@@ -19,14 +22,16 @@ class DiskAnalyzerGUI:
     TEXT_MUTED = "#94a3b8"
     ACCENT = "#3b82f6"
     ACCENT_HOVER = "#2563eb"
-    GREEN = "#22c55e"
-    RED = "#ef4444"
 
-    def __init__(self) -> None:
+    def __init__(self, initial_path: Optional[str] = None) -> None:
+        self._initial_path = initial_path
+        self._tab_counter = 0
+        self._scanning = False
+
         self.root = tk.Tk()
         self.root.title("Disk Storage Analyzer")
-        self.root.geometry("780x520")
-        self.root.minsize(620, 420)
+        self.root.geometry("860x580")
+        self.root.minsize(700, 480)
         self.root.configure(bg=self.BG)
 
         # Center on screen
@@ -39,10 +44,6 @@ class DiskAnalyzerGUI:
         y = (sh - h) // 2
         self.root.geometry(f"+{x}+{y}")
 
-        # State
-        self._scanning = False
-        self._cancel_requested = False
-
         self._build_ui()
 
     # ── UI Construction ──────────────────────────────────────────────
@@ -51,229 +52,126 @@ class DiskAnalyzerGUI:
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
 
-        main = tk.Frame(self.root, bg=self.BG)
-        main.grid(row=0, column=0, sticky="nsew", padx=40, pady=30)
-        main.columnconfigure(0, weight=1)
-        main.rowconfigure(7, weight=1)
+        # ── Menu bar ──
+        menubar = tk.Menu(self.root, bg=self.SURFACE2, fg=self.TEXT,
+                          activebackground=self.ACCENT, activeforeground="#ffffff",
+                          font=("Segoe UI", 10))
+        scan_menu = tk.Menu(menubar, tearoff=0, bg=self.SURFACE, fg=self.TEXT,
+                            activebackground=self.ACCENT, activeforeground="#ffffff",
+                            font=("Segoe UI", 10))
+        scan_menu.add_command(label="📂  New Scan...", command=self._start_new_scan,
+                              accelerator="Ctrl+N")
+        scan_menu.add_separator()
+        scan_menu.add_command(label="✕  Close Current Tab", command=self._close_current_tab,
+                              accelerator="Ctrl+W")
+        scan_menu.add_command(label="🚪  Exit", command=self.root.quit,
+                              accelerator="Ctrl+Q")
+        menubar.add_cascade(label="Scan", menu=scan_menu)
+        self.root.config(menu=menubar)
 
-        # ── Header ──
-        tk.Label(
-            main,
-            text="💾  Disk Storage Analyzer",
-            font=("Segoe UI", 22, "bold"),
-            bg=self.BG,
-            fg=self.TEXT,
-        ).grid(row=0, column=0, pady=(0, 4))
+        # Keyboard shortcuts
+        self.root.bind_all("<Control-n>", lambda _e: self._start_new_scan())
+        self.root.bind_all("<Control-w>", lambda _e: self._close_current_tab())
+        self.root.bind_all("<Control-q>", lambda _e: self.root.quit())
 
-        tk.Label(
-            main,
-            text="Scan any folder to visualise what's consuming your storage",
-            font=("Segoe UI", 11),
-            bg=self.BG,
-            fg=self.TEXT_MUTED,
-        ).grid(row=1, column=0, pady=(0, 28))
+        # ── Main notebook (one tab per scan) ──
+        style = ttk.Style()
+        style.theme_use("clam")
+        style.configure("TNotebook", background=self.BG, borderwidth=0)
+        style.configure("TNotebook.Tab", background=self.SURFACE2, foreground=self.TEXT,
+                        padding=[14, 6], font=("Segoe UI", 10))
+        style.map("TNotebook.Tab", background=[("selected", self.ACCENT)],
+                  foreground=[("selected", "#ffffff")])
 
-        # ── Input controls container (hidden when showing results) ──
-        self._input_frame = tk.Frame(main, bg=self.BG)
-        self._input_frame.grid(row=2, column=0, sticky="ew")
-        self._input_frame.columnconfigure(0, weight=1)
+        self._notebook = ttk.Notebook(self.root)
+        self._notebook.grid(row=0, column=0, sticky="nsew", padx=8, pady=(4, 8))
 
-        # ── Folder selection row ──
-        sel_frame = tk.Frame(self._input_frame, bg=self.BG)
-        sel_frame.grid(row=0, column=0, sticky="ew", pady=(0, 20))
-        sel_frame.columnconfigure(0, weight=0)
-        sel_frame.columnconfigure(1, weight=1)
+        # ── Welcome tab ──
+        self._add_welcome_tab()
 
-        tk.Label(
-            sel_frame,
-            text="Folder to scan",
-            font=("Segoe UI", 10, "bold"),
-            bg=self.BG,
-            fg=self.TEXT,
-        ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 6))
+    def _add_welcome_tab(self) -> None:
+        """Show a welcome screen as the first tab."""
+        frame = tk.Frame(self._notebook, bg=self.BG)
+        frame.columnconfigure(0, weight=1)
+        frame.rowconfigure(0, weight=1)
 
-        self._path_var = tk.StringVar(value=os.path.abspath("."))
-        self._path_entry = tk.Entry(
-            sel_frame,
-            textvariable=self._path_var,
-            font=("Consolas", 10),
-            bg=self.SURFACE,
-            fg=self.TEXT,
-            insertbackground=self.TEXT,
-            relief="flat",
-            bd=0,
-            highlightthickness=1,
-            highlightbackground=self.BORDER,
-            highlightcolor=self.ACCENT,
-        )
-        self._path_entry.grid(row=1, column=0, sticky="ew", padx=(0, 8), ipady=6, ipadx=8)
+        center = tk.Frame(frame, bg=self.BG)
+        center.grid(row=0, column=0)
 
-        self._browse_btn = self._styled_btn(
-            sel_frame,
-            text="📂  Browse",
-            command=self._browse_folder,
-            bg=self.SURFACE2,
-            hover=self.BORDER,
-        )
-        self._browse_btn.grid(row=1, column=1, sticky="e")
+        tk.Label(center, text="💾", font=("Segoe UI", 64), bg=self.BG).pack(pady=(40, 10))
+        tk.Label(center, text="Disk Storage Analyzer",
+                 font=("Segoe UI", 26, "bold"), bg=self.BG, fg=self.TEXT).pack()
+        tk.Label(center, text="Scan any folder to visualise what's consuming your storage",
+                 font=("Segoe UI", 12), bg=self.BG, fg=self.TEXT_MUTED).pack(pady=(4, 30))
 
-        # ── Quick-path buttons ──
-        quick_frame = tk.Frame(self._input_frame, bg=self.BG)
-        quick_frame.grid(row=1, column=0, sticky="w", pady=(0, 24))
-        tk.Label(
-            quick_frame, text="Quick:", font=("Segoe UI", 9), bg=self.BG, fg=self.TEXT_MUTED
-        ).pack(side=tk.LEFT, padx=(0, 6))
+        new_btn = tk.Label(center, text="📂  New Scan",
+                           font=("Segoe UI", 14, "bold"), bg=self.ACCENT, fg="#ffffff",
+                           cursor="hand2", padx=36, pady=12)
+        new_btn.pack()
+        new_btn.bind("<Button-1>", lambda _e: self._start_new_scan())
+        new_btn.bind("<Enter>", lambda _e: new_btn.configure(bg=self.ACCENT_HOVER))
+        new_btn.bind("<Leave>", lambda _e: new_btn.configure(bg=self.ACCENT))
 
-        for label, target in [
-            ("This PC", "C:\\"),
-            ("Users", os.path.expanduser("~")),
-            ("Desktop", os.path.join(os.path.expanduser("~"), "Desktop")),
-            ("Documents", os.path.join(os.path.expanduser("~"), "Documents")),
-        ]:
-            btn = tk.Label(
-                quick_frame,
-                text=label,
-                font=("Segoe UI", 9, "underline"),
-                bg=self.BG,
-                fg=self.ACCENT,
-                cursor="hand2",
-            )
-            btn.pack(side=tk.LEFT, padx=(0, 14))
-            btn.bind("<Button-1>", lambda _e, t=target: self._set_path(t))
-            btn.bind(
-                "<Enter>",
-                lambda _e, b=btn: b.configure(fg=self.ACCENT_HOVER),
-            )
-            btn.bind(
-                "<Leave>",
-                lambda _e, b=btn: b.configure(fg=self.ACCENT),
-            )
+        hint = tk.Label(center, text="or press  Ctrl+N",
+                        font=("Segoe UI", 9), bg=self.BG, fg=self.TEXT_MUTED)
+        hint.pack(pady=(12, 0))
 
-        # ── Scan button & progress (in input_frame) ──
-        self._scan_btn = self._styled_btn(
-            self._input_frame,
-            text="▶  Start Scan",
-            command=self._start_scan,
-            bg=self.ACCENT,
-            hover=self.ACCENT_HOVER,
-            font_size=12,
-        )
-        self._scan_btn.grid(row=2, column=0, pady=(0, 18), ipady=8)
+        self._notebook.add(frame, text="🏠  Home")
+        self._notebook.select(len(self._notebook.tabs()) - 1)
 
-        # ── Progress bar ──
-        self._progress = ttk.Progressbar(
-            self._input_frame,
-            mode="indeterminate",
-            length=600,
-        )
-        self._progress.grid(row=3, column=0, pady=(0, 8), sticky="ew")
-        self._progress.grid_remove()
+    # ── Scan flow ───────────────────────────────────────────────────
 
-        # ── Status label ──
-        self._status_var = tk.StringVar(value="Ready  —  choose a folder and click Start Scan")
-        self._status_lbl = tk.Label(
-            main,
-            textvariable=self._status_var,
-            font=("Segoe UI", 10),
-            bg=self.BG,
-            fg=self.TEXT_MUTED,
-            wraplength=680,
-            justify=tk.CENTER,
-        )
-        self._status_lbl.grid(row=6, column=0, pady=(0, 4))
+    def _start_new_scan(self) -> None:
+        """Open a folder dialog and begin scanning in a new tab."""
+        if self._scanning:
+            messagebox.showinfo("Scan in Progress",
+                                "Please wait for the current scan to finish.")
+            return
 
-        # ── Results container (hidden until scan completes) ──
-        self._results_frame = tk.Frame(main, bg=self.BG)
-        self._results_frame.grid(row=7, column=0, sticky="nsew", pady=(0, 10))
-        self._results_frame.columnconfigure(0, weight=1)
-        self._results_frame.rowconfigure(1, weight=1)
-        self._results_frame.grid_remove()
-
-    def _styled_btn(
-        self,
-        parent: tk.Widget,
-        text: str,
-        command,
-        bg: str,
-        hover: str,
-        font_size: int = 10,
-    ) -> tk.Label:
-        """Create a label that looks like a button (customisable colours)."""
-        btn = tk.Label(
-            parent,
-            text=text,
-            font=("Segoe UI", font_size, "bold"),
-            bg=bg,
-            fg=self.TEXT,
-            cursor="hand2",
-            padx=20,
-            pady=6,
-        )
-        btn.bind("<Button-1>", lambda _e: command())
-        btn.bind("<Enter>", lambda _e: btn.configure(bg=hover))
-        btn.bind("<Leave>", lambda _e: btn.configure(bg=bg))
-        return btn
-
-    # ── Actions ─────────────────────────────────────────────────────
-
-    def _set_path(self, path: str) -> None:
-        self._path_var.set(path)
-
-    def _browse_folder(self) -> None:
         folder = filedialog.askdirectory(
             title="Select a folder to scan",
-            initialdir=self._path_var.get() or "C:\\",
+            initialdir=self._initial_path or "C:\\",
         )
-        if folder:
-            self._path_var.set(folder)
-
-    def _set_scanning_state(self, scanning: bool) -> None:
-        self._scanning = scanning
-        state = tk.DISABLED if scanning else tk.NORMAL
-        self._browse_btn.configure(state=state)
-        self._scan_btn.configure(state=state)
-        for child in self._scan_btn.master.winfo_children():
-            for sub in (
-                child.winfo_children() if hasattr(child, "winfo_children") else []
-            ):
-                if isinstance(sub, tk.Label) and sub.cget("text") in (
-                    "This PC",
-                    "Users",
-                    "Desktop",
-                    "Documents",
-                ):
-                    sub.configure(state=state)
-
-        if scanning:
-            self._progress.grid()
-            self._progress.start(10)
-            self._scan_btn.configure(text="⏳  Scanning…")
-        else:
-            self._progress.stop()
-            self._progress.grid_remove()
-            self._scan_btn.configure(text="▶  Start Scan")
-
-    def _start_scan(self) -> None:
-        if self._scanning:
+        if not folder:
             return
 
-        path = self._path_var.get().strip()
-        if not path or not os.path.isdir(path):
-            messagebox.showwarning(
-                "Invalid Folder",
-                "Please select a valid folder before scanning.",
-            )
-            return
+        self._scanning = True
+        self._tab_counter += 1
+        tab_id = self._tab_counter
+        short_name = os.path.basename(folder) or folder
 
-        self._cancel_requested = False
-        self._set_scanning_state(True)
-        self._status_var.set("Scanning…  this may take a while for large folders")
+        # ── Create a loading tab ──
+        load_frame = tk.Frame(self._notebook, bg=self.BG)
+        load_frame.columnconfigure(0, weight=1)
+        load_frame.rowconfigure(0, weight=1)
 
-        # Run scan in background thread
-        t = threading.Thread(target=self._run_scan, args=(path,), daemon=True)
+        center = tk.Frame(load_frame, bg=self.BG)
+        center.grid(row=0, column=0)
+
+        tk.Label(center, text="⏳", font=("Segoe UI", 48), bg=self.BG).pack(pady=(40, 10))
+        tk.Label(center, text=f"Scanning {short_name}…",
+                 font=("Segoe UI", 16, "bold"), bg=self.BG, fg=self.TEXT).pack()
+        self._scan_status_var = tk.StringVar(value="Starting scan…")
+        tk.Label(center, textvariable=self._scan_status_var,
+                 font=("Segoe UI", 11), bg=self.BG, fg=self.TEXT_MUTED).pack(pady=(8, 0))
+
+        progress = ttk.Progressbar(load_frame, mode="indeterminate", length=400)
+        progress.grid(row=1, column=0, sticky="ew", padx=100, pady=(0, 40))
+        progress.start(10)
+
+        self._notebook.add(load_frame, text=f"⏳  {short_name[:20]}")
+        self._notebook.select(len(self._notebook.tabs()) - 1)
+
+        # ── Run scan in background ──
+        t = threading.Thread(
+            target=self._run_scan,
+            args=(folder, tab_id, short_name, load_frame, progress),
+            daemon=True,
+        )
         t.start()
 
-    def _run_scan(self, path: str) -> None:
+    def _run_scan(self, path: str, tab_id: int, short_name: str,
+                  load_frame: tk.Frame, progress: ttk.Progressbar) -> None:
         """Run the full scan pipeline (background thread)."""
         try:
             from disk_analyzer.aggregator import aggregate
@@ -285,192 +183,246 @@ class DiskAnalyzerGUI:
             config = Config()
             scan_path = os.path.abspath(path)
 
-            # ── Check cache ──
-            files = load_cache(config)
+            # ── Check cache (only reuses cache if scan_path matches) ──
+            self._schedule_status_text(f"Loading cache for {short_name}…")
+            files = load_cache(config, scan_path=scan_path)
             if files is not None:
-                self._schedule_status(
+                self._schedule_status_text(
                     f"✅ Loaded {len(files):,} files from cache — aggregating…"
                 )
             else:
-                self._schedule_status(f"📡 Scanning {scan_path}…")
+                self._schedule_status_text(f"📡 Scanning {short_name}…")
 
                 def _progress(found: int, current: str) -> None:
-                    self._schedule_status(
+                    self._schedule_status_text(
                         f"📁  {found:,} files found  —  {os.path.basename(current) or current}"
                     )
 
                 scan_start = time.time()
                 files = scan_files(config, scan_path, progress_callback=_progress)
                 elapsed = time.time() - scan_start
-
-                self._schedule_status(
+                self._schedule_status_text(
                     f"✅ Scanned {len(files):,} files in {elapsed:.1f}s — caching…"
                 )
                 save_cache(config, files, scan_path)
-                self._schedule_status(
-                    f"✅ Scanned {len(files):,} files in {elapsed:.1f}s — cached"
-                )
-
-            if self._cancel_requested:
-                self._schedule_finish(cancelled=True)
-                return
 
             # ── Aggregate ──
-            self._schedule_status("📊 Aggregating data…")
+            self._schedule_status_text("📊 Aggregating data…")
             data = aggregate(config, files)
 
-            self._schedule_finish(data=data)
+            # ── Replace loading tab with results tab ──
+            self._schedule_replace_tab(tab_id, short_name, data, scan_path,
+                                       load_frame, progress)
 
         except Exception as exc:
-            self._schedule_finish(error=str(exc))
+            self._schedule_show_error(load_frame, progress, str(exc))
 
-    def _schedule_status(self, msg: str) -> None:
-        """Schedule a status update on the main thread."""
-        self.root.after(0, lambda: self._status_var.set(msg))
+    def _schedule_status_text(self, msg: str) -> None:
+        """Update the scanning status label from any thread."""
+        def _update() -> None:
+            try:
+                self._scan_status_var.set(msg)
+            except tk.TclError:
+                pass
+        self.root.after(0, _update)
 
-    def _schedule_finish(
-        self,
-        cancelled: bool = False,
-        data=None,
-        error: Optional[str] = None,
-    ) -> None:
-        """Schedule completion handling on the main thread."""
+    def _schedule_replace_tab(self, tab_id: int, short_name: str, data: dict,
+                              scan_path: str, load_frame: tk.Frame,
+                              progress: ttk.Progressbar) -> None:
+        """Replace the loading tab with the results view (main thread)."""
 
-        def _finish() -> None:
-            self._set_scanning_state(False)
-            if error:
-                self._status_var.set(f"❌  Error: {error}")
-                messagebox.showerror("Scan Error", error)
-            elif cancelled:
-                self._status_var.set("⛔  Scan cancelled")
-            elif data:
-                self._show_results(data)
+        def _replace() -> None:
+            try:
+                progress.stop()
+                progress.destroy()
+                tab_idx = self._notebook.index(load_frame)
+                self._notebook.forget(tab_idx)
+            except tk.TclError:
+                pass
 
-        self.root.after(0, _finish)
+            # ── Build the results tab content ──
+            self._build_result_tab(short_name, data, scan_path)
+            self._scanning = False
 
-    def _show_results(self, data) -> None:
-        """Fill the embedded results frame and show it, hiding the input form."""
+        self.root.after(0, _replace)
+
+    def _schedule_show_error(self, load_frame: tk.Frame, progress: ttk.Progressbar,
+                             error: str) -> None:
+        """Show error in place of the loading tab (main thread)."""
+
+        def _show() -> None:
+            try:
+                progress.stop()
+                progress.destroy()
+                tab_idx = self._notebook.index(load_frame)
+                self._notebook.forget(tab_idx)
+            except tk.TclError:
+                pass
+
+            messagebox.showerror("Scan Error", error)
+            self._scanning = False
+
+        self.root.after(0, _show)
+
+    # ── Results tab builder ─────────────────────────────────────────
+
+    def _build_result_tab(self, short_name: str, data: dict,
+                          scan_path: str) -> None:
+        """Create a new tab with full scan results."""
         s = data["summary"]
         scan_info = data["scan_info"]
+        folders = data.get("folders", [])
+        files = data.get("files", [])
 
-        # Clear any previous results
-        for child in self._results_frame.winfo_children():
-            child.destroy()
+        container = tk.Frame(self._notebook, bg=self.BG)
+        container.columnconfigure(0, weight=1)
+        container.rowconfigure(3, weight=1)
 
-        # ── Scrollable canvas for results ──
-        canvas = tk.Canvas(self._results_frame, bg=self.BG, highlightthickness=0)
-        scrollbar = tk.Scrollbar(self._results_frame, orient="vertical", command=canvas.yview)
-        scrollable = tk.Frame(canvas, bg=self.BG)
+        # ── Title row ──
+        tk.Label(container, text="✅  Scan Complete",
+                 font=("Segoe UI", 18, "bold"), bg=self.BG,
+                 fg=self.TEXT).grid(row=0, column=0, pady=(14, 2))
 
-        scrollable.bind("<Configure>", lambda _e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=scrollable, anchor="nw", width=canvas.winfo_width())
-        canvas.configure(yscrollcommand=scrollbar.set)
+        tk.Label(container, text=scan_path, font=("Consolas", 9),
+                 bg=self.BG, fg=self.TEXT_MUTED).grid(row=1, column=0, pady=(0, 8))
 
-        canvas.grid(row=0, column=0, sticky="nsew")
+        # ── Stat cards ──
+        cards = tk.Frame(container, bg=self.BG)
+        cards.grid(row=2, column=0, pady=(0, 8))
+        self._make_stat_card(cards, "Total Size",
+                             f"{s['total_size'] / (1024**3):.2f} GB",
+                             f"{s['total_size'] / (1024**2):.1f} MB", 0)
+        self._make_stat_card(cards, "Files", f"{s['total_files']:,}", "", 1)
+        self._make_stat_card(cards, "Folders",
+                             f"{scan_info.get('total_folders', 0):,}", "", 2)
+        self._make_stat_card(cards, "Largest File",
+                             f"{s['largest_file_size'] / (1024**2):.1f} MB",
+                             s.get('largest_file_name', ''), 3)
+
+        # ── Sub-notebook: Folders / Files ──
+        sub_style = ttk.Style()
+        sub_style.configure("Sub.TNotebook", background=self.BG, borderwidth=0)
+        sub_style.configure("Sub.TNotebook.Tab", background=self.SURFACE2,
+                            foreground=self.TEXT, padding=[10, 3],
+                            font=("Segoe UI", 9))
+        sub_style.map("Sub.TNotebook.Tab", background=[("selected", self.ACCENT)],
+                      foreground=[("selected", "#ffffff")])
+
+        sub_notebook = ttk.Notebook(container, style="Sub.TNotebook")
+        sub_notebook.grid(row=3, column=0, sticky="nsew", padx=8)
+
+        # Folders tab
+        folders_frame = tk.Frame(sub_notebook, bg=self.SURFACE)
+        self._build_treeview(folders_frame,
+                             columns=("folder", "size", "files"),
+                             headings=("Folder", "Size", "Files"),
+                             data=[(f["path"], self._fmt_size(f["total_size"]),
+                                    f"{f['file_count']:,}") for f in folders[:50]],
+                             col_widths=(400, 120, 100))
+        sub_notebook.add(folders_frame, text="📁  Top Folders")
+
+        # Files tab
+        files_frame = tk.Frame(sub_notebook, bg=self.SURFACE)
+        self._build_treeview(files_frame,
+                             columns=("name", "size", "path"),
+                             headings=("Name", "Size", "Path"),
+                             data=[(f["name"], self._fmt_size(f["size"]),
+                                    f["path"]) for f in files[:100]],
+                             col_widths=(250, 120, 400))
+        sub_notebook.add(files_frame, text="📄  Top Files")
+
+        # ── Bottom buttons ──
+        btn_frame = tk.Frame(container, bg=self.BG)
+        btn_frame.grid(row=4, column=0, pady=(8, 6))
+
+        new_btn = tk.Button(btn_frame, text="📂  New Scan",
+                            font=("Segoe UI", 10, "bold"),
+                            bg=self.ACCENT, fg="#ffffff", relief="flat",
+                            cursor="hand2", padx=20, pady=6,
+                            command=self._start_new_scan)
+        new_btn.pack(side=tk.LEFT, padx=6)
+        new_btn.bind("<Enter>", lambda _e: new_btn.configure(bg=self.ACCENT_HOVER))
+        new_btn.bind("<Leave>", lambda _e: new_btn.configure(bg=self.ACCENT))
+
+        close_btn = tk.Button(btn_frame, text="✕  Close Tab",
+                              font=("Segoe UI", 9),
+                              bg=self.SURFACE2, fg=self.TEXT, relief="flat",
+                              cursor="hand2", padx=14, pady=6,
+                              command=self._close_current_tab)
+        close_btn.pack(side=tk.LEFT, padx=6)
+        close_btn.bind("<Enter>", lambda _e: close_btn.configure(bg=self.BORDER))
+        close_btn.bind("<Leave>", lambda _e: close_btn.configure(bg=self.SURFACE2))
+
+        # ── Add to notebook & select ──
+        self._notebook.add(container, text=f"📊  {short_name[:20]}")
+        self._notebook.select(len(self._notebook.tabs()) - 1)
+
+    # ── Tab management ──────────────────────────────────────────────
+
+    def _close_current_tab(self) -> None:
+        """Close the currently selected tab (keep at least the Home tab)."""
+        sel = self._notebook.select()
+        if not sel:
+            return
+        idx = self._notebook.index(sel)
+        if idx == 0:  # Don't close the Home tab
+            return
+        self._notebook.forget(idx)
+
+    # ── Helpers ─────────────────────────────────────────────────────
+
+    @staticmethod
+    def _fmt_size(bytes_val: int) -> str:
+        if bytes_val == 0:
+            return "0 B"
+        units = ["B", "KB", "MB", "GB", "TB"]
+        i = 0
+        while bytes_val >= 1024 and i < len(units) - 1:
+            bytes_val /= 1024
+            i += 1
+        return f"{bytes_val:.1f} {units[i]}"
+
+    def _make_stat_card(self, parent: tk.Frame, label: str, value: str,
+                        sub: str, col: int) -> None:
+        card = tk.Frame(parent, bg=self.SURFACE2, bd=0, highlightthickness=1,
+                        highlightbackground=self.BORDER, padx=14, pady=8)
+        card.grid(row=0, column=col, padx=6)
+        tk.Label(card, text=label, font=("Segoe UI", 8, "bold"),
+                 bg=self.SURFACE2, fg=self.TEXT_MUTED).pack()
+        tk.Label(card, text=value, font=("Segoe UI", 14, "bold"),
+                 bg=self.SURFACE2, fg=self.TEXT).pack()
+        if sub:
+            tk.Label(card, text=sub, font=("Segoe UI", 8),
+                     bg=self.SURFACE2, fg=self.TEXT_MUTED).pack()
+
+    def _build_treeview(self, parent: tk.Frame, columns: tuple,
+                        headings: tuple, data: list,
+                        col_widths: tuple) -> None:
+        parent.columnconfigure(0, weight=1)
+        parent.rowconfigure(0, weight=1)
+
+        tree = ttk.Treeview(parent, columns=columns, show="headings",
+                            selectmode="browse")
+        for col, heading, w in zip(columns, headings, col_widths):
+            tree.heading(col, text=heading)
+            tree.column(col, width=w, anchor="w")
+
+        style = ttk.Style()
+        style.configure("Treeview", background=self.SURFACE, foreground=self.TEXT,
+                        fieldbackground=self.SURFACE, rowheight=24,
+                        font=("Segoe UI", 9))
+        style.configure("Treeview.Heading", background=self.SURFACE2,
+                        foreground=self.TEXT, font=("Segoe UI", 9, "bold"))
+        style.map("Treeview", background=[("selected", self.ACCENT)])
+
+        scrollbar = ttk.Scrollbar(parent, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=scrollbar.set)
+
+        tree.grid(row=0, column=0, sticky="nsew")
         scrollbar.grid(row=0, column=1, sticky="ns")
-        canvas.bind("<Configure>", lambda e: canvas.itemconfig(1, width=e.width))
 
-        scrollable.columnconfigure(0, weight=1)
-
-        # ── Results header ──
-        header = tk.Frame(scrollable, bg=self.BG, padx=10, pady=(0, 12))
-        header.grid(row=0, column=0, sticky="ew")
-        tk.Label(
-            header, text="✅  Scan Complete",
-            font=("Segoe UI", 16, "bold"),
-            bg=self.BG, fg=self.TEXT,
-        ).pack()
-        tk.Label(
-            header, text=self._path_var.get(),
-            font=("Consolas", 9), bg=self.BG, fg=self.TEXT_MUTED,
-        ).pack()
-
-        # ── Stats cards ──
-        cards_frame = tk.Frame(scrollable, bg=self.BG, padx=0, pady=6)
-        cards_frame.grid(row=1, column=0, sticky="ew")
-        cards_frame.columnconfigure(0, weight=1)
-
-        stats = [
-            ("Total Size", f"{s['total_size'] / (1024**3):.2f} GB",
-             f"{s['total_size'] / (1024**2):.1f} MB"),
-            ("Total Files", f"{s['total_files']:,}", ""),
-            ("Total Folders", f"{scan_info.get('total_folders', 0):,}", ""),
-            ("Largest File", s['largest_file_name'],
-             f"{s['largest_file_size'] / (1024**2):.1f} MB"),
-            ("Avg File Size", f"{s['average_file_size'] / 1024:.1f} KB", ""),
-        ]
-
-        for label, value, sub in stats:
-            card = tk.Frame(
-                cards_frame, bg=self.SURFACE, padx=16, pady=10,
-                highlightbackground=self.BORDER, highlightthickness=1,
-            )
-            card.grid(row=cards_frame.grid_size()[1], column=0, sticky="ew", pady=3)
-            row = tk.Frame(card, bg=self.SURFACE)
-            row.pack(fill=tk.X)
-            tk.Label(
-                row, text=label, font=("Segoe UI", 9, "bold"),
-                bg=self.SURFACE, fg=self.TEXT_MUTED,
-            ).pack(side=tk.LEFT)
-            tk.Label(
-                row, text=value, font=("Segoe UI", 14, "bold"),
-                bg=self.SURFACE, fg=self.ACCENT,
-            ).pack(side=tk.RIGHT)
-            if sub:
-                tk.Label(
-                    card, text=sub, font=("Segoe UI", 9),
-                    bg=self.SURFACE, fg=self.TEXT_MUTED,
-                    anchor="e",
-                ).pack(fill=tk.X)
-
-        # ── Top 5 extensions ──
-        if "extensions" in data and data["extensions"]:
-            ext_frame = tk.Frame(scrollable, bg=self.BG, padx=0, pady=(4, 10))
-            ext_frame.grid(row=2, column=0, sticky="ew")
-            ext_frame.columnconfigure(0, weight=1)
-            tk.Label(
-                ext_frame, text="Top File Types",
-                font=("Segoe UI", 10, "bold"),
-                bg=self.BG, fg=self.TEXT,
-            ).grid(row=0, column=0, sticky="w", pady=(0, 4))
-            for ext in data["extensions"][:5]:
-                ext_row = tk.Frame(ext_frame, bg=self.SURFACE2, padx=12, pady=4)
-                ext_row.grid(row=ext_frame.grid_size()[1], column=0, sticky="ew", pady=2)
-                tk.Label(
-                    ext_row, text=ext["extension"],
-                    font=("Consolas", 10, "bold"),
-                    bg=self.SURFACE2, fg=self.GREEN,
-                ).pack(side=tk.LEFT)
-                tk.Label(
-                    ext_row, text=f"{ext['count']:,} files  ·  "
-                    f"{ext['total_size'] / (1024**2):.1f} MB",
-                    font=("Segoe UI", 10),
-                    bg=self.SURFACE2, fg=self.TEXT_MUTED,
-                ).pack(side=tk.RIGHT)
-
-        # ── Scan Again button ──
-        btn_frame = tk.Frame(scrollable, bg=self.BG, padx=0, pady=8)
-        btn_frame.grid(row=3, column=0, sticky="ew")
-        again_btn = tk.Button(
-            btn_frame, text="🔄  Scan Another Folder",
-            font=("Segoe UI", 10, "bold"),
-            bg=self.ACCENT, fg=self.TEXT,
-            relief="flat", cursor="hand2",
-            command=self._reset_view,
-        )
-        again_btn.pack()
-        again_btn.bind("<Enter>", lambda _e: again_btn.configure(bg=self.ACCENT_HOVER))
-        again_btn.bind("<Leave>", lambda _e: again_btn.configure(bg=self.ACCENT))
-
-        # ── Swap views ──
-        self._input_frame.grid_remove()
-        self._results_frame.grid()
-
-    def _reset_view(self) -> None:
-        """Hide results and show the input form again."""
-        self._results_frame.grid_remove()
-        self._input_frame.grid()
-        self._status_var.set("Ready  —  choose a folder and click Start Scan")
+        for row in data:
+            tree.insert("", tk.END, values=row)
 
     # ── Run ─────────────────────────────────────────────────────────
 
